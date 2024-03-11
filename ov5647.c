@@ -168,9 +168,9 @@ struct ov5647_mode {
 };
 
 struct ov5647 {
-	struct v4l2_subdev sd;
-
-	struct v4l2_mbus_framefmt fmt;
+	struct v4l2_subdev 			sd;
+	struct media_pad			pad;
+	struct v4l2_mbus_framefmt 	fmt;
 
 	struct clk *xclk; /* system clock to IMX219 */
 	uint32_t xclk_freq;
@@ -687,21 +687,23 @@ static int ov5647_write_reg_8bit(struct ov5647 *ov5647, uint16_t reg, uint8_t va
 	struct i2c_client *client = v4l2_get_subdevdata(&ov5647->sd);
 	uint8_t buf[3] = { reg >> 8, reg & 0xff, val};;
 
-	if (i2c_master_send(client, buf, 3) != 3)
+	if (i2c_master_send(client, buf, 3) != 3) {
 		printk("error in write reg 8 bit");
 		return -EINVAL;
+	}
 
 	return 0;
 }
 
-static int ov5647_write_regs(struct ov5647 *ov5647, const struct ov5647_reg *regs, u32 len) 
+static int ov5647_write_regs(struct ov5647 *ov5647, const struct ov5647_reg *regs, int len) 
 {
 	struct i2c_client *client = v4l2_get_subdevdata(&ov5647->sd);
 	unsigned int i;
 	int ret;
 
+	printk("ov5647_write_regs:: len : %d", len);
 	for (i = 0; i < len; i++) {
-		printk("attempting to write %d to reg 0x%4.4x.", regs[i].val, regs[i].address);
+		printk("%d : attempting to write %d to reg 0x%4.4x.", i, regs[i].val, regs[i].address);
 		ret = ov5647_write_reg_8bit(ov5647, regs[i].address, regs[i].val);
 		if (ret) {
 			dev_err_ratelimited(&client->dev,
@@ -746,12 +748,16 @@ static int ov5647_identify_module(struct ov5647 *ov5647)
 		dev_err(&client->dev, "chip id mismatch: %x!=%x\n",
 			OV5647_CHIP_ID_HIGH, val_high);
 		return -EIO;
+	} else {
+		printk("ov5647 :: chip is high match");
 	}
 
     if (val_low != OV5647_CHIP_ID_LOW ) {
 		dev_err(&client->dev, "chip id mismatch: %x!=%x\n",
 			OV5647_CHIP_ID_LOW, val_low);
 		return -EIO;
+	} else {
+		printk("ov5647 :: chip is low match");
 	}
 	return 0;
 }
@@ -798,13 +804,14 @@ static int ov5647_set_binning(struct ov5647 *ov5647)
 static int ov5647_set_stream(struct v4l2_subdev *sd, int enable) {
 	struct ov5647 *ov5647 = to_ov5647(sd);
 	int ret = 0;
+
+	printk(" this is the ov5647_set_stream, to be implemented");
+
 	mutex_lock(&ov5647->mutex);
 	if (ov5647->streaming == enable) {
 		mutex_unlock(&ov5647->mutex);
 		return 0;
 	}
-
-	printk(" this is the ov5647_set_stream, to be implemented");
 
 	// if (enable) {
 	// 	/*
@@ -906,9 +913,8 @@ error_out:
 	return ret;
 }
 
-static int get_regulators(struct ov5647 *ov5647)
+static int get_regulators(struct ov5647 *ov5647, struct device *dev)
 {
-	struct i2c_client *client = v4l2_get_subdevdata(&ov5647->sd);
 	unsigned int i;
 
 	for (i = 0; i < OV5647_NUM_SUPPLIES; i++) {
@@ -916,7 +922,7 @@ static int get_regulators(struct ov5647 *ov5647)
 	}
 
 	printk("get_regulators::devm_regulator_bulk_get");
-	return devm_regulator_bulk_get(&client->dev,
+	return devm_regulator_bulk_get(dev,
 					OV5647_NUM_SUPPLIES,
 					ov5647->supplies);
 }
@@ -926,6 +932,8 @@ static int power_on(struct device *dev)
 {
 	struct ov5647 *ov5647 = dev_get_drvdata(dev);
 	int ret;
+
+	dev_dbg(dev, "OV5647 power on\n");
 
 	ret = regulator_bulk_enable(OV5647_NUM_SUPPLIES,
 				    ov5647->supplies);
@@ -1069,6 +1077,63 @@ static int init_controls(struct ov5647 *ov5647)
 
 //-------------------------------------
 
+static int enum_mbus_code(struct v4l2_subdev *sd,
+				 struct v4l2_subdev_state *sd_state,
+				 struct v4l2_subdev_mbus_code_enum *code)
+{
+	struct ov5647 *ov5647 = to_ov5647(sd);
+	printk("ov5647 :: enum_mbus_code");
+
+	return 0;
+}
+
+static int get_pad_format(struct v4l2_subdev *sd,
+				   struct v4l2_subdev_state *sd_state,
+				   struct v4l2_subdev_format *fmt)
+{
+	struct ov5647 *ov5647 = to_ov5647(sd);
+	int ret = 0;
+
+	mutex_lock(&ov5647->mutex);
+	// ret = __imx219_get_pad_format(imx219, sd_state, fmt);
+	printk("ov5647 :: get_pad_format");
+	mutex_unlock(&ov5647->mutex);
+
+	return ret;
+}
+
+static int set_pad_format(struct v4l2_subdev *sd,
+				 struct v4l2_subdev_state *sd_state,
+				 struct v4l2_subdev_format *fmt) 
+{
+	struct ov5647 *ov5647 = to_ov5647(sd);
+	printk("ov5647 :: set_pad_format");
+
+	return 0;
+}
+
+static int get_selection(struct v4l2_subdev *sd,
+				struct v4l2_subdev_state *sd_state,
+				struct v4l2_subdev_selection *sel)
+{
+	struct ov5647 *ov5647 = to_ov5647(sd);
+	printk("ov5647 :: get_selection");
+
+	return 0;
+}
+
+static int enum_frame_size(struct v4l2_subdev *sd,
+				  struct v4l2_subdev_state *sd_state,
+				  struct v4l2_subdev_frame_size_enum *fse)
+{
+	struct ov5647 *ov5647 = to_ov5647(sd);
+	printk("ov5647 :: enum_frame_size");
+
+	return 0;
+}
+
+//-------------------------------------
+
 static const struct v4l2_subdev_core_ops core_ops = {
 	.subscribe_event = v4l2_ctrl_subdev_subscribe_event,
 	.unsubscribe_event = v4l2_event_subdev_unsubscribe,
@@ -1079,11 +1144,11 @@ static const struct v4l2_subdev_video_ops video_ops = {
 };
 
 static const struct v4l2_subdev_pad_ops pad_ops = {
-	// .enum_mbus_code = ov5647_enum_mbus_code,
-	// .get_fmt = ov5647_get_pad_format,
-	// .set_fmt = ov5647_set_pad_format,
-	// .get_selection = ov5647_get_selection,
-	// .enum_frame_size = ov5647_enum_frame_size,
+	.enum_mbus_code = enum_mbus_code,
+	.get_fmt = get_pad_format,
+	.set_fmt = set_pad_format,
+	.get_selection = get_selection,
+	.enum_frame_size = enum_frame_size,
 };
 
 static const struct v4l2_subdev_ops subdev_ops = {
@@ -1097,125 +1162,6 @@ static const struct v4l2_subdev_internal_ops ov5647_internal_ops = {
 };
 
 //-------------------------------------
-
-static int ov5647_probe(struct i2c_client *client)
-{
-	struct device* dev;
-	struct ov5647* ov5647;
-	int ret;
-
-	printk("ov5647_probe");
-	ret = 0;
-	dev = &client->dev;
-
-	printk("ov5647_probe:: devm_kzalloc ");
-	ov5647 = devm_kzalloc(dev, sizeof(*ov5647), GFP_KERNEL);
-	if (!ov5647)
-		return -ENOMEM;
-
-	/* Initialize subdev */
-	printk("ov5647_probe:: Initialize subdev ");
-	v4l2_i2c_subdev_init(&ov5647->sd, client, &subdev_ops);
-	ov5647->sd.internal_ops = &ov5647_internal_ops;
-	ov5647->sd.flags |= V4L2_SUBDEV_FL_HAS_DEVNODE |
-			    V4L2_SUBDEV_FL_HAS_EVENTS;
-	ov5647->sd.entity.function = MEDIA_ENT_F_CAM_SENSOR;
-
-	/* Check the hardware configuration in device tree */
-	printk("ov5647_probe:: check_hwcfg ");
-	if (check_hwcfg(dev))
-		return -EINVAL;
-
-	/* Get system clock (xclk) */
-	printk("ov5647_probe:: devm_clk_get ");
-	ov5647->xclk = devm_clk_get(dev, NULL);
-	if (IS_ERR(ov5647->xclk)) {
-		printk( "ov5647_probe::failed to get xclk\n");
-		return PTR_ERR(ov5647->xclk);
-	}
-	/* Get clk rate freq (xclk_freq)*/
-	printk("ov5647_probe:: clk_get_rate ");
-	ov5647->xclk_freq = clk_get_rate(ov5647->xclk);
-	if (ov5647->xclk_freq != OV5647_XCLK_FREQ) {
-		printk("ov5647_probe::xclk frequency not supported: %d Hz\n",
-			ov5647->xclk_freq);
-		return -EINVAL;
-	}
-
-	/* Request optional pwr pin */
-	printk("ov5647_probe:: devm_gpiod_get_optional ");
-	ov5647->pwr_gpio = devm_gpiod_get_optional(dev, "pwdn", GPIOD_OUT_HIGH);
-	if (IS_ERR(ov5647->pwr_gpio)) {
-		printk("ov5647_probe :: error init the gpio pwr ");
-		return -EINVAL;
-	}
-
-	printk("ov5647_probe:: get_regulators 2");
-	ret = get_regulators(ov5647); 
-	if (ret) {
-		printk("ov5647_probe::failed to get regulators\n");
-		return ret;
-	}
-
-	/* Set default mode to max resolution */
-	printk("ov5647_probe::Set default mode");
-	ov5647->mode = &supported_modes[0];
-
-	printk("ov5647_probe::init_controls");
-	ret = init_controls(ov5647);
-	if (ret)
-		goto error_power_off;
-
-	ret = power_on(dev);
-	if (ret)
-		return ret;
-
-	// ret = ov5647_identify_module(ov5647);
-	// if (ret)
-	// 	goto error_power_off;
-
-
-// 	/* sensor doesn't enter LP-11 state upon power up until and unless
-// 	 * streaming is started, so upon power up switch the modes to:
-// 	 * streaming -> standby
-// 	 */
-// 	ret = ov5647_write_reg_8bit(ov5647, OV5647_REG_MIPI_CTRL00, MIPI_CTRL00_CLOCK_LANE_GATE 
-// 									| MIPI_CTRL00_BUS_IDLE | MIPI_CTRL00_CLOCK_LANE_DISABLE);
-// 	if (ret < 0)
-// 		goto error_power_off;
-
-// 	/* Initialize default format */
-// 	set_default_format(ov5647);
-
-// 	/* Initialize source pad */
-// 	// TODO
-
-// 	ret = v4l2_async_register_subdev_sensor(&ov5647->sd);
-// 	if (ret < 0) {
-// 		dev_err(dev, "failed to register sensor sub-device: %d\n", ret);
-// 		goto error_media_entity;
-// 	}
-
-// 	/* Enable runtime PM and turn off the device */
-// 	pm_runtime_set_active(dev);
-// 	pm_runtime_enable(dev);
-// 	pm_runtime_idle(dev);
-
-// 	return 0;
-
-// error_media_entity:
-// 	media_entity_cleanup(&ov5647->sd.entity);
-
-// // error_handler_free:
-// 	free_controls(ov5647);
-
-error_power_off:
-// 	power_off(dev);
-
-	return ret;
-}
-
-
 static int ov5647_parse_dt(struct ov5647 *sensor, struct device_node *np)
 {
 	struct v4l2_fwnode_endpoint bus_cfg = {
@@ -1330,6 +1276,142 @@ static int ov5647_probe2(struct i2c_client *client)
 		return -1;
 	
 	return 0;
+}
+
+static int ov5647_probe(struct i2c_client *client)
+{
+	struct device* dev;
+	struct ov5647* ov5647;
+	struct device_node *np;
+	int ret;
+
+	printk("ov5647_probe");
+	ret = 0;
+	dev = &client->dev;
+
+	printk("ov5647_probe:: devm_kzalloc ");
+	ov5647 = devm_kzalloc(dev, sizeof(*ov5647), GFP_KERNEL);
+	if (!ov5647)
+		return -ENOMEM;
+
+	/* Initialize subdev */
+	printk("ov5647_probe:: Initialize subdev ");
+	v4l2_i2c_subdev_init(&ov5647->sd, client, &subdev_ops);
+	ov5647->sd.internal_ops = &ov5647_internal_ops;
+	ov5647->sd.flags |= V4L2_SUBDEV_FL_HAS_DEVNODE |
+			    V4L2_SUBDEV_FL_HAS_EVENTS;
+	ov5647->sd.entity.function = MEDIA_ENT_F_CAM_SENSOR;
+
+	/* Check the hardware configuration in device tree */
+	// printk("ov5647_probe:: check_hwcfg ");
+	// if (check_hwcfg(dev))
+	// 	return -EINVAL;
+
+	np = client->dev.of_node;
+	if (IS_ENABLED(CONFIG_OF) && np) {
+		printk("ov5647_probe:: ov5647_parse_dt ");
+		ret = ov5647_parse_dt(ov5647, np);
+		if (ret) {
+			dev_err(dev, "DT parsing error: %d\n", ret);
+			return ret;
+		}
+	}
+
+	/* Get system clock (xclk) */
+	printk("ov5647_probe:: devm_clk_get ");
+	ov5647->xclk = devm_clk_get(dev, NULL);
+	if (IS_ERR(ov5647->xclk)) {
+		printk( "ov5647_probe::failed to get xclk\n");
+		return PTR_ERR(ov5647->xclk);
+	}
+	/* Get clk rate freq (xclk_freq)*/
+	printk("ov5647_probe:: clk_get_rate ");
+	ov5647->xclk_freq = clk_get_rate(ov5647->xclk);
+	if (ov5647->xclk_freq != OV5647_XCLK_FREQ) {
+		printk("ov5647_probe::xclk frequency not supported: %d Hz\n",
+			ov5647->xclk_freq);
+		return -EINVAL;
+	}
+
+	/* Request optional pwr pin */
+	printk("ov5647_probe:: devm_gpiod_get_optional ");
+	ov5647->pwr_gpio = devm_gpiod_get_optional(dev, "pwdn", GPIOD_OUT_HIGH);
+	if (IS_ERR(ov5647->pwr_gpio)) {
+		printk("ov5647_probe :: error init the gpio pwr ");
+		return -EINVAL;
+	}
+
+	printk("ov5647_probe:: get_regulators ");
+	ret = get_regulators(ov5647, dev); 
+	if (ret) {
+		printk("ov5647_probe::failed to get regulators\n");
+		return ret;
+	}
+
+	/* Set default mode to max resolution */
+	printk("ov5647_probe:: Set default mode ");
+	ov5647->mode = &supported_modes[3];
+
+	printk("ov5647_probe:: init_controls ");
+	ret = init_controls(ov5647);
+	if (ret)
+		goto error_power_off;
+
+	printk("ov5647_probe:: power_on ");
+	ret = power_on(dev);
+	if (ret)
+		return ret;
+
+	printk("ov5647_probe:: ov5647_identify_module ");
+	ret = ov5647_identify_module(ov5647);
+	if (ret)
+		goto error_power_off;
+
+
+	/* sensor doesn't enter LP-11 state upon power up until and unless
+	 * streaming is started, so upon power up switch the modes to:
+	 * streaming -> standby
+	 */
+	ret = ov5647_write_reg_8bit(ov5647, OV5647_REG_MIPI_CTRL00, MIPI_CTRL00_CLOCK_LANE_GATE 
+									| MIPI_CTRL00_BUS_IDLE | MIPI_CTRL00_CLOCK_LANE_DISABLE);
+	if (ret < 0)
+		goto error_power_off;
+
+	/* Initialize default format */
+	set_default_format(ov5647);
+
+	/* Initialize source pad */
+	ov5647->pad.flags = MEDIA_PAD_FL_SOURCE;
+	ret = media_entity_pads_init(&ov5647->sd.entity, 1, &ov5647->pad);
+	if (ret < 0)
+		goto error_handler_free;
+
+	ret = v4l2_async_register_subdev_sensor(&ov5647->sd);
+	if (ret < 0) {
+		dev_err(dev, "failed to register sensor sub-device: %d\n", ret);
+		goto error_media_entity;
+	}
+
+	/* Enable runtime PM and turn off the device */
+	pm_runtime_set_active(dev);
+	pm_runtime_enable(dev);
+	pm_runtime_idle(dev);
+
+	return 0;
+
+error_media_entity:
+	printk("ov5647_probe :: error_media_entity ");
+	media_entity_cleanup(&ov5647->sd.entity);
+
+error_handler_free:
+	printk("ov5647_probe :: error_handler_free ");
+	free_controls(ov5647);
+
+error_power_off:
+	printk("ov5647_probe :: error_power_off ");
+	power_off(dev);
+
+	return ret;
 }
 
 //---------------------------
