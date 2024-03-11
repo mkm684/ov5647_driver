@@ -2,7 +2,10 @@
 #include <linux/delay.h>
 #include <linux/gpio/consumer.h>
 #include <linux/i2c.h>
+#include <linux/init.h>
+#include <linux/io.h>
 #include <linux/module.h>
+#include <linux/of_graph.h>
 #include <linux/pm_runtime.h>
 #include <linux/regulator/consumer.h>
 #include <linux/slab.h>
@@ -11,6 +14,7 @@
 #include <media/v4l2-device.h>
 #include <media/v4l2-event.h>
 #include <media/v4l2-fwnode.h>
+#include <media/v4l2-mediabus.h>
 #include <media/v4l2-mediabus.h>
 #include <asm/unaligned.h>
 
@@ -681,13 +685,11 @@ static int ov5647_read_reg_8bit(struct ov5647 *ov5647, uint16_t reg, uint8_t *va
 static int ov5647_write_reg_8bit(struct ov5647 *ov5647, uint16_t reg, uint8_t val)
 {
 	struct i2c_client *client = v4l2_get_subdevdata(&ov5647->sd);
-	u8 buf[3];
+	uint8_t buf[3] = { reg >> 8, reg & 0xff, val};;
 
-	put_unaligned_be16(reg, buf);
-	memcpy(buf+2, &val, sizeof(val));
-	// put_unaligned_be32(val << (8 * 2), buf + 2);
 	if (i2c_master_send(client, buf, 3) != 3)
-		return -EIO;
+		printk("error in write reg 8 bit");
+		return -EINVAL;
 
 	return 0;
 }
@@ -699,6 +701,7 @@ static int ov5647_write_regs(struct ov5647 *ov5647, const struct ov5647_reg *reg
 	int ret;
 
 	for (i = 0; i < len; i++) {
+		printk("attempting to write %d to reg 0x%4.4x.", regs[i].val, regs[i].address);
 		ret = ov5647_write_reg_8bit(ov5647, regs[i].address, regs[i].val);
 		if (ret) {
 			dev_err_ratelimited(&client->dev,
@@ -828,6 +831,8 @@ static int ov5647_open(struct v4l2_subdev *sd, struct v4l2_subdev_fh *fh)
 	struct v4l2_mbus_framefmt *try_fmt_img;
 	struct v4l2_rect *try_crop;
 
+	printk("ov5647_open");
+
 	mutex_lock(&ov5647->mutex);
 
 	/* Initialize try_fmt */
@@ -906,9 +911,11 @@ static int get_regulators(struct ov5647 *ov5647)
 	struct i2c_client *client = v4l2_get_subdevdata(&ov5647->sd);
 	unsigned int i;
 
-	for (i = 0; i < OV5647_NUM_SUPPLIES; i++)
+	for (i = 0; i < OV5647_NUM_SUPPLIES; i++) {
 		ov5647->supplies[i].supply = ov5647_supply_name[i];
+	}
 
+	printk("get_regulators::devm_regulator_bulk_get");
 	return devm_regulator_bulk_get(&client->dev,
 					OV5647_NUM_SUPPLIES,
 					ov5647->supplies);
@@ -917,35 +924,31 @@ static int get_regulators(struct ov5647 *ov5647)
 /* Power/clock management functions */
 static int power_on(struct device *dev)
 {
-	struct v4l2_subdev *sd = dev_get_drvdata(dev);
-	struct ov5647 *ov5647 = to_ov5647(sd);
+	struct ov5647 *ov5647 = dev_get_drvdata(dev);
 	int ret;
 
 	ret = regulator_bulk_enable(OV5647_NUM_SUPPLIES,
 				    ov5647->supplies);
 	if (ret) {
-		dev_err(dev, "%s: failed to enable regulators\n",
-			__func__);
+		printk( "%s: failed to enable regulators\n", __func__);
 		return ret;
-	}
-
-	ret = clk_prepare_enable(ov5647->xclk);
-	if (ret) {
-		dev_err(dev, "%s: failed to enable clock\n", __func__);
-		goto reg_off;
 	}
 
 	if (ov5647->pwr_gpio) {
 		gpiod_set_value_cansleep(ov5647->pwr_gpio, 0);
 		msleep(PWDN_ACTIVE_DELAY_MS);
-	} else {
+	}
+
+	ret = clk_prepare_enable(ov5647->xclk);
+	if (ret) {
+		printk("%s: failed to enable clock\n", __func__);
 		goto reg_off;
 	}
 
 	ret = ov5647_write_regs(ov5647, sensor_oe_enable_regs,
 				 ARRAY_SIZE(sensor_oe_enable_regs));
 	if (ret < 0) {
-		dev_err(dev, "write sensor_oe_enable_regs error\n");
+		printk( "write sensor_oe_enable_regs error\n");
 		goto reg_off;
 	}
 
@@ -958,7 +961,7 @@ reg_off:
 	ret = ov5647_write_regs(ov5647, sensor_oe_disable_regs,
 				 ARRAY_SIZE(sensor_oe_disable_regs));
 	if (ret < 0) {
-		dev_err(dev, "write sensor_oe_disable_regs error\n");
+		printk( "write sensor_oe_disable_regs error\n");
 	}
 	clk_disable_unprepare(ov5647->xclk);
 
@@ -1025,6 +1028,7 @@ static int init_controls(struct ov5647 *ov5647)
 	if (ret)
 		return ret;
 
+	printk("init_controls:: mutex_init ");
 	mutex_init(&ov5647->mutex);
 	ctrl_hdlr->lock = &ov5647->mutex;
 
@@ -1101,101 +1105,231 @@ static int ov5647_probe(struct i2c_client *client)
 	int ret;
 
 	printk("ov5647_probe");
+	ret = 0;
 	dev = &client->dev;
 
+	printk("ov5647_probe:: devm_kzalloc ");
 	ov5647 = devm_kzalloc(dev, sizeof(*ov5647), GFP_KERNEL);
 	if (!ov5647)
 		return -ENOMEM;
 
-	v4l2_i2c_subdev_init(&ov5647->sd, client, &subdev_ops);
-
-	/* Check the hardware configuration in device tree */
-	if (check_hwcfg(dev))
-		return -EINVAL;
-
-	/* Get system clock (xclk) */
-	ov5647->xclk = devm_clk_get(dev, NULL);
-	if (IS_ERR(ov5647->xclk)) {
-		dev_err(dev, "failed to get xclk\n");
-		return PTR_ERR(ov5647->xclk);
-	}
-
-	/* Get clk rate freq (xclk_freq)*/
-	ov5647->xclk_freq = clk_get_rate(ov5647->xclk);
-	if (ov5647->xclk_freq != OV5647_XCLK_FREQ) {
-		dev_err(dev, "xclk frequency not supported: %d Hz\n",
-			ov5647->xclk_freq);
-		return -EINVAL;
-	}
-
-	ret = get_regulators(ov5647);
-	if (ret) {
-		dev_err(dev, "failed to get regulators\n");
-		return ret;
-	}
-
-	/* Request optional pwr pin */
-	ov5647->pwr_gpio = devm_gpiod_get_optional(dev, "pwdn", GPIOD_OUT_HIGH);
-
-	ret = power_on(dev);
-	if (ret)
-		return ret;
-
-	ret = ov5647_identify_module(ov5647);
-	if (ret)
-		goto error_power_off;
-
-	/* Set default mode to max resolution */
-	ov5647->mode = &supported_modes[0];
-
-	/* sensor doesn't enter LP-11 state upon power up until and unless
-	 * streaming is started, so upon power up switch the modes to:
-	 * streaming -> standby
-	 */
-	ret = ov5647_write_reg_8bit(ov5647, OV5647_REG_MIPI_CTRL00, MIPI_CTRL00_CLOCK_LANE_GATE 
-									| MIPI_CTRL00_BUS_IDLE | MIPI_CTRL00_CLOCK_LANE_DISABLE);
-	if (ret < 0)
-		goto error_power_off;
-
-	/* Initialize default format */
-	set_default_format(ov5647);
-
-	ret = init_controls(ov5647);
-	if (ret)
-		goto error_power_off;
-
 	/* Initialize subdev */
+	printk("ov5647_probe:: Initialize subdev ");
+	v4l2_i2c_subdev_init(&ov5647->sd, client, &subdev_ops);
 	ov5647->sd.internal_ops = &ov5647_internal_ops;
 	ov5647->sd.flags |= V4L2_SUBDEV_FL_HAS_DEVNODE |
 			    V4L2_SUBDEV_FL_HAS_EVENTS;
 	ov5647->sd.entity.function = MEDIA_ENT_F_CAM_SENSOR;
 
-	/* Initialize source pad */
-	// TODO
+	/* Check the hardware configuration in device tree */
+	printk("ov5647_probe:: check_hwcfg ");
+	if (check_hwcfg(dev))
+		return -EINVAL;
 
-	ret = v4l2_async_register_subdev_sensor(&ov5647->sd);
-	if (ret < 0) {
-		dev_err(dev, "failed to register sensor sub-device: %d\n", ret);
-		goto error_media_entity;
+	/* Get system clock (xclk) */
+	printk("ov5647_probe:: devm_clk_get ");
+	ov5647->xclk = devm_clk_get(dev, NULL);
+	if (IS_ERR(ov5647->xclk)) {
+		printk( "ov5647_probe::failed to get xclk\n");
+		return PTR_ERR(ov5647->xclk);
+	}
+	/* Get clk rate freq (xclk_freq)*/
+	printk("ov5647_probe:: clk_get_rate ");
+	ov5647->xclk_freq = clk_get_rate(ov5647->xclk);
+	if (ov5647->xclk_freq != OV5647_XCLK_FREQ) {
+		printk("ov5647_probe::xclk frequency not supported: %d Hz\n",
+			ov5647->xclk_freq);
+		return -EINVAL;
 	}
 
-	/* Enable runtime PM and turn off the device */
-	pm_runtime_set_active(dev);
-	pm_runtime_enable(dev);
-	pm_runtime_idle(dev);
+	/* Request optional pwr pin */
+	printk("ov5647_probe:: devm_gpiod_get_optional ");
+	ov5647->pwr_gpio = devm_gpiod_get_optional(dev, "pwdn", GPIOD_OUT_HIGH);
+	if (IS_ERR(ov5647->pwr_gpio)) {
+		printk("ov5647_probe :: error init the gpio pwr ");
+		return -EINVAL;
+	}
 
-	return 0;
+	printk("ov5647_probe:: get_regulators 2");
+	ret = get_regulators(ov5647); 
+	if (ret) {
+		printk("ov5647_probe::failed to get regulators\n");
+		return ret;
+	}
 
-error_media_entity:
-	media_entity_cleanup(&ov5647->sd.entity);
+	/* Set default mode to max resolution */
+	printk("ov5647_probe::Set default mode");
+	ov5647->mode = &supported_modes[0];
 
-// error_handler_free:
-	free_controls(ov5647);
+	printk("ov5647_probe::init_controls");
+	ret = init_controls(ov5647);
+	if (ret)
+		goto error_power_off;
+
+	ret = power_on(dev);
+	if (ret)
+		return ret;
+
+	// ret = ov5647_identify_module(ov5647);
+	// if (ret)
+	// 	goto error_power_off;
+
+
+// 	/* sensor doesn't enter LP-11 state upon power up until and unless
+// 	 * streaming is started, so upon power up switch the modes to:
+// 	 * streaming -> standby
+// 	 */
+// 	ret = ov5647_write_reg_8bit(ov5647, OV5647_REG_MIPI_CTRL00, MIPI_CTRL00_CLOCK_LANE_GATE 
+// 									| MIPI_CTRL00_BUS_IDLE | MIPI_CTRL00_CLOCK_LANE_DISABLE);
+// 	if (ret < 0)
+// 		goto error_power_off;
+
+// 	/* Initialize default format */
+// 	set_default_format(ov5647);
+
+// 	/* Initialize source pad */
+// 	// TODO
+
+// 	ret = v4l2_async_register_subdev_sensor(&ov5647->sd);
+// 	if (ret < 0) {
+// 		dev_err(dev, "failed to register sensor sub-device: %d\n", ret);
+// 		goto error_media_entity;
+// 	}
+
+// 	/* Enable runtime PM and turn off the device */
+// 	pm_runtime_set_active(dev);
+// 	pm_runtime_enable(dev);
+// 	pm_runtime_idle(dev);
+
+// 	return 0;
+
+// error_media_entity:
+// 	media_entity_cleanup(&ov5647->sd.entity);
+
+// // error_handler_free:
+// 	free_controls(ov5647);
 
 error_power_off:
-	power_off(dev);
+// 	power_off(dev);
 
 	return ret;
+}
+
+
+static int ov5647_parse_dt(struct ov5647 *sensor, struct device_node *np)
+{
+	struct v4l2_fwnode_endpoint bus_cfg = {
+		.bus_type = V4L2_MBUS_CSI2_DPHY,
+	};
+	struct device_node *ep;
+	int ret;
+
+	ep = of_graph_get_next_endpoint(np, NULL);
+	if (!ep)
+		return -EINVAL;
+
+	ret = v4l2_fwnode_endpoint_parse(of_fwnode_handle(ep), &bus_cfg);
+	if (ret)
+		goto out;
+
+out:
+	of_node_put(ep);
+
+	return ret;
+}
+
+static int ov5647_configure_regulators(struct device *dev,
+				       struct ov5647 *sensor)
+{
+	unsigned int i;
+
+	for (i = 0; i < OV5647_NUM_SUPPLIES; i++)
+		sensor->supplies[i].supply = ov5647_supply_name[i];
+
+	return devm_regulator_bulk_get(dev, OV5647_NUM_SUPPLIES,
+				       sensor->supplies);
+}
+
+static int ov5647_power_on(struct device *dev)
+{
+	struct ov5647 *sensor = dev_get_drvdata(dev);
+	int ret;
+
+	dev_dbg(dev, "OV5647 power on\n");
+
+	ret = regulator_bulk_enable(OV5647_NUM_SUPPLIES, sensor->supplies);
+	if (ret < 0) {
+		dev_err(dev, "Failed to enable regulators\n");
+		return ret;
+	}
+
+	if (sensor->pwr_gpio) {
+		gpiod_set_value_cansleep(sensor->pwr_gpio, 0);
+		msleep(PWDN_ACTIVE_DELAY_MS);
+	}
+
+	return ret;
+}
+
+static int ov5647_probe2(struct i2c_client *client)
+{
+	struct device_node *np = client->dev.of_node;
+	struct device *dev = &client->dev;
+	struct ov5647 *sensor;
+	struct v4l2_subdev *sd;
+	u32 xclk_freq;
+	int ret;
+
+	sensor = devm_kzalloc(dev, sizeof(*sensor), GFP_KERNEL);
+	if (!sensor)
+		return -ENOMEM;
+
+	if (IS_ENABLED(CONFIG_OF) && np) {
+		ret = ov5647_parse_dt(sensor, np);
+		if (ret) {
+			printk( "DT parsing error: %d\n", ret);
+			return ret;
+		}
+	}
+
+	sensor->xclk = devm_clk_get(dev, NULL);
+	if (IS_ERR(sensor->xclk)) {
+		printk( "could not get xclk");
+		return PTR_ERR(sensor->xclk);
+	}
+
+	xclk_freq = clk_get_rate(sensor->xclk);
+	if (xclk_freq != 25000000) {
+		printk( "Unsupported clock frequency: %u\n", xclk_freq);
+		return -EINVAL;
+	}
+
+	/* Request the power down GPIO asserted. */
+	sensor->pwr_gpio = devm_gpiod_get_optional(dev, "pwdn", GPIOD_OUT_HIGH);
+	if (IS_ERR(sensor->pwr_gpio)) {
+		printk( "Failed to get 'pwdn' gpio\n");
+		return -EINVAL;
+	}
+
+	ret = ov5647_configure_regulators(dev, sensor);
+	if (ret) {
+		dev_err(dev, "Failed to get power regulators\n");
+		return ret;
+	}
+
+	mutex_init(&sensor->mutex);
+
+	sd = &sensor->sd;
+	v4l2_i2c_subdev_init(sd, client, &subdev_ops);
+	sd->internal_ops = &ov5647_internal_ops;
+	sd->flags |= V4L2_SUBDEV_FL_HAS_DEVNODE | V4L2_SUBDEV_FL_HAS_EVENTS;
+	sd->entity.function = MEDIA_ENT_F_CAM_SENSOR;
+
+	ret = ov5647_power_on(dev);
+	if (ret)
+		return -1;
+	
+	return 0;
 }
 
 //---------------------------
