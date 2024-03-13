@@ -834,7 +834,6 @@ static int ov5647_start_streaming(struct ov5647 *ov5647)
 
 	printk(" ov5647_start_streaming");
 
-
 	ret = pm_runtime_resume_and_get(&client->dev);
 	if (ret < 0)
 		return ret;
@@ -895,13 +894,13 @@ static void ov5647_stop_streaming(struct ov5647 *ov5647)
 	return;
 }
 
-static int ov5647_set_stream(struct v4l2_subdev *sd, int enable) {
+static int ov5647_set_stream(struct v4l2_subdev *sd, int enable) 
+{
+
 	struct ov5647 *ov5647 = to_ov5647(sd);
-	struct i2c_client *client = v4l2_get_subdevdata(sd);
 	int ret ;
 
-	printk(" this is the ov5647_set_stream, to be implemented");
-
+	printk(" ov5647_set_stream starting : %d", enable); 
 	mutex_lock(&ov5647->mutex);
 	if (ov5647->streaming == enable) {
 		mutex_unlock(&ov5647->mutex);
@@ -909,21 +908,15 @@ static int ov5647_set_stream(struct v4l2_subdev *sd, int enable) {
 	}
 
 	if (enable) {
-		/*
-		 * Apply default & customized values
-		 * and then start streaming.
-		 */
 		if (ov5647_start_streaming(ov5647))
 			goto err_unlock;
 	} else {
 		ov5647_stop_streaming(ov5647);
 	}
-
 	ov5647->streaming = enable;
 
 err_unlock:
 	mutex_unlock(&ov5647->mutex);
-
 	printk(" ov5647_set_stream:: return 0");
 	return ret;
 }
@@ -1105,26 +1098,25 @@ static void set_default_format(struct ov5647 *ov5647)
 	fmt->field = V4L2_FIELD_NONE;
 }
 
-static int get_rate_factor(struct ov5647 *ov5647)
-{
-	switch (ov5647->mode->binning) {
-		case BINNING_NONE:
-		case BINNING_VER:
-			return 1;
-		case BINNING_HOR:
-			return 2;
-		case BINNING_BOTH:
-			return 3;
-	}
-	return -EINVAL;
-}
+// static int get_rate_factor(struct ov5647 *ov5647)
+// {
+// 	switch (ov5647->mode->binning) {
+// 		case BINNING_NONE:
+// 		case BINNING_VER:
+// 			return 1;
+// 		case BINNING_HOR:
+// 			return 2;
+// 		case BINNING_BOTH:
+// 			return 3;
+// 	}
+// 	return -EINVAL;
+// }
 
 static int set_ctrl(struct v4l2_ctrl *ctrl)
 {
 	struct ov5647 *ov5647 = container_of(ctrl->handler, struct ov5647, ctrl_handler);
 	struct i2c_client *client = v4l2_get_subdevdata(&ov5647->sd);
 	int ret;
-	int rate_factor;
 
 	if (ctrl->id == V4L2_CID_VBLANK) {
 		int exposure_max, exposure_def;
@@ -1145,10 +1137,6 @@ static int set_ctrl(struct v4l2_ctrl *ctrl)
 	 */
 	if (pm_runtime_get_if_in_use(&client->dev) == 0)
 		return 0;
-
-	rate_factor = get_rate_factor(ov5647);
-	if (rate_factor < 0)
-		return rate_factor;
 	
 	switch (ctrl->id) {
 		case V4L2_CID_ANALOGUE_GAIN:
@@ -1162,14 +1150,13 @@ static int set_ctrl(struct v4l2_ctrl *ctrl)
 			}
 			break;
 		case V4L2_CID_EXPOSURE: {
-			uint32_t exposure_curr = ctrl->val / rate_factor;
-			ret = ov5647_write_reg_8bit(ov5647, OV5647_REG_EXPOSURE0, (uint8_t)(exposure_curr & 0xff));
+			ret = ov5647_write_reg_8bit(ov5647, OV5647_REG_EXPOSURE0, (uint8_t)(ctrl->val & 0xff));
 			if (ret == 0) {
 				ret = ov5647_write_reg_8bit(ov5647, OV5647_REG_EXPOSURE1, 
-								(uint8_t)((exposure_curr >> 8) && 0xff));
+								(uint8_t)((ctrl->val >> 8) && 0xff));
 				if (ret == 0) {
 					ret = ov5647_write_reg_8bit(ov5647, OV5647_REG_EXPOSURE2, 
-							(uint8_t)((exposure_curr >> 16) && 0xf));
+							(uint8_t)((ctrl->val >> 16) && 0xf));
 				} else {
 					ret = -EINVAL;
 				}
@@ -1236,8 +1223,6 @@ static int set_ctrl(struct v4l2_ctrl *ctrl)
 	pm_runtime_put(&client->dev);
 
 	return ret;
-
-	
 }
 
 static const struct v4l2_ctrl_ops _ctrl_ops = {
@@ -1251,7 +1236,7 @@ static int init_controls(struct ov5647 *ov5647)
 	struct v4l2_ctrl_handler *ctrl_hdlr;
 	unsigned int height = ov5647->mode->height;
 	struct v4l2_fwnode_device_properties props;
-	int exposure_max, exposure_def, hblank, rate_factor, pixel_rate;
+	int exposure_max, exposure_def, hblank;
 	int ret;
 
 	ctrl_hdlr = &ov5647->ctrl_handler;
@@ -1263,19 +1248,14 @@ static int init_controls(struct ov5647 *ov5647)
 	mutex_init(&ov5647->mutex);
 	ctrl_hdlr->lock = &ov5647->mutex;
 
-	rate_factor = get_rate_factor(ov5647);
-	if (rate_factor < 0)
-		return rate_factor;
-
 	/* By default, PIXEL_RATE is read only */
-	pixel_rate = ov5647->mode->pixel_rate * rate_factor;
-	ov5647->pixel_rate = v4l2_ctrl_new_std(ctrl_hdlr, &_ctrl_ops,
-					       V4L2_CID_PIXEL_RATE, pixel_rate, pixel_rate,
-					       1, pixel_rate);
+	ov5647->pixel_rate = 
+		v4l2_ctrl_new_std(ctrl_hdlr, &_ctrl_ops,
+			V4L2_CID_PIXEL_RATE, ov5647->mode->pixel_rate, 
+			ov5647->mode->pixel_rate, 1, ov5647->mode->pixel_rate);
 
 	ov5647->link_freq =
-		v4l2_ctrl_new_int_menu(ctrl_hdlr, &_ctrl_ops,
-				       V4L2_CID_LINK_FREQ,
+		v4l2_ctrl_new_int_menu(ctrl_hdlr, &_ctrl_ops, V4L2_CID_LINK_FREQ,
 				       ARRAY_SIZE(ov5647_link_freq_menu) - 1, 0,
 				       ov5647_link_freq_menu);
 	if (ov5647->link_freq)
@@ -1406,6 +1386,7 @@ static int _get_pad_format(struct ov5647 *ov5647,
 				   struct v4l2_subdev_format *fmt)
 {
 	if (fmt->which == V4L2_SUBDEV_FORMAT_TRY) {
+	printk("ov5647 :: get_pad_format");
 		struct v4l2_mbus_framefmt *try_fmt =
 			v4l2_subdev_get_try_format(&ov5647->sd, sd_state,
 						   fmt->pad);
@@ -1423,7 +1404,6 @@ static int _get_pad_format(struct ov5647 *ov5647,
 			return -EINVAL;
 		}
 	}
-
 	return 0;
 }
 
@@ -1451,7 +1431,7 @@ static int set_pad_format(struct v4l2_subdev *sd,
 	struct ov5647 *ov5647 = to_ov5647(sd);
 	const struct ov5647_mode *mode;
 	struct v4l2_mbus_framefmt *framefmt;
-	int exposure_max, exposure_def, hblank, pixel_rate, rate_factor;
+	int exposure_max, exposure_def, hblank;
 
 	printk("ov5647 :: set_pad_format");
 	mutex_lock(&ov5647->mutex);
@@ -1465,18 +1445,13 @@ static int set_pad_format(struct v4l2_subdev *sd,
 					fmt->format.height);
 		_update_image_pad_format(mode, fmt);
 		if (fmt->which == V4L2_SUBDEV_FORMAT_TRY) {
+			printk("ov5647 :: set_pad_format - V4L2_SUBDEV_FORMAT_TRY");
 			framefmt = v4l2_subdev_get_try_format(sd, sd_state, fmt->pad);
 			*framefmt = fmt->format;
 		} else if (ov5647->mode != mode || ov5647->fmt.code != fmt->format.code) {
-			uint32_t prev_hts = ov5647->mode->width + ov5647->hblank->val;
-
+			printk("ov5647 :: set_pad_format - ov5647->mode != mode || ov5647->fmt.code != fmt->format.code");
 			ov5647->fmt = fmt->format;
 			ov5647->mode = mode;
-			rate_factor = get_rate_factor(ov5647);
-			if (rate_factor < 0){
-				printk("ov5647 :: set_pad_format - get_rate_factor return -EINVAL");
-				return rate_factor;
-			}
 
 			/* Update limits and set FPS to default */
 			__v4l2_ctrl_modify_range(ov5647->vblank, OV5647_VBLANK_MIN,
@@ -1484,7 +1459,7 @@ static int set_pad_format(struct v4l2_subdev *sd,
 									mode->vts_def - mode->height);
 			__v4l2_ctrl_s_ctrl(ov5647->vblank, mode->vts_def - mode->height);
 
-			hblank = ov5647->mode->hts_def - mode->width;
+			hblank = mode->hts_def - mode->width;
 			__v4l2_ctrl_modify_range(ov5647->hblank, hblank, hblank, 1, hblank);
 			__v4l2_ctrl_s_ctrl(ov5647->hblank, hblank);
 
@@ -1496,11 +1471,11 @@ static int set_pad_format(struct v4l2_subdev *sd,
 						 exposure_max, ov5647->exposure->step, exposure_def);
 
 			/* Scale the pixel rate based on the mode specific factor */
-			pixel_rate = ov5647->mode->pixel_rate * rate_factor;
-			__v4l2_ctrl_modify_range(ov5647->pixel_rate, pixel_rate,
-						 pixel_rate, 1, pixel_rate);
+			__v4l2_ctrl_modify_range(ov5647->pixel_rate, ov5647->mode->pixel_rate,
+								ov5647->mode->pixel_rate, 1, ov5647->mode->pixel_rate);
 		}
 	} else {
+		printk("ov5647 :: set_pad_format - pad != 0");
 		if (fmt->which == V4L2_SUBDEV_FORMAT_TRY) {
 			framefmt = v4l2_subdev_get_try_format(sd, sd_state,
 							      fmt->pad);
@@ -1512,7 +1487,6 @@ static int set_pad_format(struct v4l2_subdev *sd,
 	}
 
 	mutex_unlock(&ov5647->mutex);
-
 	printk("ov5647 :: set_pad_format : 0");
 	return 0;
 }
@@ -1799,6 +1773,21 @@ error_power_off:
 	return ret;
 }
 
+static void ov5647_remove(struct i2c_client *client)
+{
+	struct v4l2_subdev *sd = i2c_get_clientdata(client);
+	struct ov5647 *ov5647 = to_ov5647(sd);
+
+	v4l2_async_unregister_subdev(sd);
+	media_entity_cleanup(&sd->entity);
+	free_controls(ov5647);
+
+	pm_runtime_disable(&client->dev);
+	if (!pm_runtime_status_suspended(&client->dev))
+		power_off(&client->dev);
+	pm_runtime_set_suspended(&client->dev);
+}
+
 //---------------------------
 
 static const struct of_device_id ov5647_dt_ids[] = {
@@ -1807,19 +1796,18 @@ static const struct of_device_id ov5647_dt_ids[] = {
 };
 MODULE_DEVICE_TABLE(of, ov5647_dt_ids);
 
-// static const struct dev_pm_ops imx219_pm_ops = {
-// 	SET_SYSTEM_SLEEP_PM_OPS(imx219_suspend, imx219_resume)
-// 	SET_RUNTIME_PM_OPS(imx219_power_off, imx219_power_on, NULL)
-// };
+static const struct dev_pm_ops ov5647_pm_ops = {
+	SET_RUNTIME_PM_OPS(power_off, power_on, NULL)
+};
 
 static struct i2c_driver ov5647_i2c_driver = {
 	.driver = {
 		.name = "ov5647",
 		.of_match_table	= ov5647_dt_ids,
-		// .pm = &imx219_pm_ops,
+		// .pm = &ov5647_pm_ops,
 	},
 	.probe_new = ov5647_probe,
-	// .remove = imx219_remove,
+	// .remove = ov5647_remove,
 };
 
 module_i2c_driver(ov5647_i2c_driver);
