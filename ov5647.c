@@ -958,52 +958,6 @@ static void free_controls(struct ov5647 *ov5647)
 	mutex_destroy(&ov5647->mutex);
 }
 
-static int check_hwcfg(struct device *dev)
-{
-	struct fwnode_handle *endpoint;
-	struct v4l2_fwnode_endpoint ep_cfg = {
-		.bus_type = V4L2_MBUS_CSI2_DPHY
-	};
-	int ret = -EINVAL;
-
-	endpoint = fwnode_graph_get_next_endpoint(dev_fwnode(dev), NULL);
-	if (!endpoint) {
-		dev_err(dev, "endpoint node not found\n");
-		return -EINVAL;
-	}
-
-	if (v4l2_fwnode_endpoint_alloc_parse(endpoint, &ep_cfg)) {
-		dev_err(dev, "could not parse endpoint\n");
-		goto error_out;
-	}
-
-	/* Check the number of MIPI CSI2 data lanes */
-	if (ep_cfg.bus.mipi_csi2.num_data_lanes != 2) {
-		dev_err(dev, "only 2 data lanes are currently supported\n");
-		goto error_out;
-	}
-
-	/* Check the link frequency set in device tree */
-	if (!ep_cfg.nr_of_link_frequencies) {
-		dev_err(dev, "link-frequency property not found in DT\n");
-		goto error_out;
-	}
-	if (ep_cfg.nr_of_link_frequencies != 1 ||
-	    ep_cfg.link_frequencies[0] != OV5647_DEFAULT_LINK_FREQ) {
-		dev_err(dev, "Link frequency not supported: %lld\n",
-			ep_cfg.link_frequencies[0]);
-		goto error_out;
-	}
-
-	ret = 0;
-
-error_out:
-	v4l2_fwnode_endpoint_free(&ep_cfg);
-	fwnode_handle_put(endpoint);
-
-	return ret;
-}
-
 static int get_regulators(struct ov5647 *ov5647, struct device *dev)
 {
 	unsigned int i;
@@ -1097,20 +1051,6 @@ static void set_default_format(struct ov5647 *ov5647)
 	fmt->height = supported_modes[3].height;
 	fmt->field = V4L2_FIELD_NONE;
 }
-
-// static int get_rate_factor(struct ov5647 *ov5647)
-// {
-// 	switch (ov5647->mode->binning) {
-// 		case BINNING_NONE:
-// 		case BINNING_VER:
-// 			return 1;
-// 		case BINNING_HOR:
-// 			return 2;
-// 		case BINNING_BOTH:
-// 			return 3;
-// 	}
-// 	return -EINVAL;
-// }
 
 static int set_ctrl(struct v4l2_ctrl *ctrl)
 {
@@ -1385,11 +1325,10 @@ static int _get_pad_format(struct ov5647 *ov5647,
 				   struct v4l2_subdev_state *sd_state,
 				   struct v4l2_subdev_format *fmt)
 {
+	struct v4l2_mbus_framefmt *try_fmt;
 	if (fmt->which == V4L2_SUBDEV_FORMAT_TRY) {
-	printk("ov5647 :: get_pad_format");
-		struct v4l2_mbus_framefmt *try_fmt =
-			v4l2_subdev_get_try_format(&ov5647->sd, sd_state,
-						   fmt->pad);
+		printk("ov5647 :: get_pad_format");
+		try_fmt = v4l2_subdev_get_try_format(&ov5647->sd, sd_state, fmt->pad);
 		/* update the code which could change due to vflip or hflip: */
 		try_fmt->code = fmt->pad == 0 ? 
 				MEDIA_BUS_FMT_SRGGB10_1X10 :
@@ -1612,7 +1551,7 @@ static const struct v4l2_subdev_internal_ops ov5647_internal_ops = {
 };
 
 //-------------------------------------
-static int ov5647_parse_dt(struct ov5647 *ov5647, struct device_node *np)
+static int check_hwcfg(struct ov5647 *ov5647, struct device_node *np)
 {
 	struct v4l2_fwnode_endpoint bus_cfg = {
 		.bus_type = V4L2_MBUS_CSI2_DPHY,
@@ -1661,15 +1600,10 @@ static int ov5647_probe(struct i2c_client *client)
 			    V4L2_SUBDEV_FL_HAS_EVENTS;
 	ov5647->sd.entity.function = MEDIA_ENT_F_CAM_SENSOR;
 
-	/* Check the hardware configuration in device tree */
-	// printk("ov5647_probe:: check_hwcfg ");
-	// if (check_hwcfg(dev))
-	// 	return -EINVAL;
-
 	np = client->dev.of_node;
 	if (IS_ENABLED(CONFIG_OF) && np) {
-		printk("ov5647_probe:: ov5647_parse_dt ");
-		ret = ov5647_parse_dt(ov5647, np);
+		printk("ov5647_probe:: check_hwcfg ");
+		ret = check_hwcfg(ov5647, np);
 		if (ret) {
 			dev_err(dev, "DT parsing error: %d\n", ret);
 			return ret;
@@ -1683,6 +1617,7 @@ static int ov5647_probe(struct i2c_client *client)
 		printk( "ov5647_probe::failed to get xclk\n");
 		return PTR_ERR(ov5647->xclk);
 	}
+
 	/* Get clk rate freq (xclk_freq)*/
 	printk("ov5647_probe:: clk_get_rate ");
 	ov5647->xclk_freq = clk_get_rate(ov5647->xclk);
@@ -1804,10 +1739,10 @@ static struct i2c_driver ov5647_i2c_driver = {
 	.driver = {
 		.name = "ov5647",
 		.of_match_table	= ov5647_dt_ids,
-		// .pm = &ov5647_pm_ops,
+		.pm = &ov5647_pm_ops,
 	},
 	.probe_new = ov5647_probe,
-	// .remove = ov5647_remove,
+	.remove = ov5647_remove,
 };
 
 module_i2c_driver(ov5647_i2c_driver);
